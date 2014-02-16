@@ -1,0 +1,4 @@
+MyFirstGit
+==========
+
+github exercising project
