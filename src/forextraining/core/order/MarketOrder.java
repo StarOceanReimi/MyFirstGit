@@ -34,7 +34,7 @@ public interface MarketOrder {
     
     default BigDecimal compareNewPriceValue(BigDecimal priceValue) {
         if(isAskOrder()) {
-            
+        
             BigDecimal pipSpread = priceValue.subtract(getDealPrice().getValue()).multiply(new BigDecimal(10000));
             return getDealPrice().getPipValue().multiply(pipSpread).multiply(getOrderAmount());
         } else {

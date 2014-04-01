@@ -6,16 +6,20 @@
 
 package forextraining.data;
 
-import forextraining.core.CurrencyExchange;
-import java.math.BigDecimal;
+import java.io.IOException;
+import java.time.ZonedDateTime;
 
 /**
  *
  * @author Reimi
  */
-public interface PriceList {
+public interface DataRetriever {
     
-    BigDecimal getAskPriceValue(CurrencyExchange exchangeType);
+    void restartRetriver();
     
-    BigDecimal getBidPriceValue(CurrencyExchange exchangeType);
+    void stopRetrieve();
+    
+    void retrieve() throws IOException;
+    
+    ZonedDateTime getRetrieveDateTime();
 }

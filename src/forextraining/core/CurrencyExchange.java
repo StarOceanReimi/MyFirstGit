@@ -16,6 +16,7 @@ import forextraining.core.order.StopLossOrder;
 import forextraining.data.BasicOnadaDataRetriever;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
 
 /**
  *
@@ -134,4 +135,7 @@ public enum CurrencyExchange implements Exchange<ExchangableCurrency, Exchangabl
         return new ExchangePrice(base, basePip, BasicOnadaDataRetriever.getInstance().getBidPriceValue(this));
     }
     
+    public ZonedDateTime getPriceDateTime() {
+        return BasicOnadaDataRetriever.getInstance().getRetrieveDateTime();
+    }
 }

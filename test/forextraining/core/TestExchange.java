@@ -8,6 +8,9 @@ package forextraining.core;
 
 import static forextraining.core.CurrencyExchange.EUR_USD;
 import forextraining.core.order.MarketOrder;
+import forextraining.tools.RC4CipherTools;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
@@ -20,6 +23,7 @@ import java.net.URLConnection;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Arrays;
 import javax.script.Invocable;
 import javax.script.ScriptEngine;
 import javax.script.ScriptEngineManager;
@@ -55,10 +59,10 @@ public class TestExchange {
         
     }
     
-    
+    @Test
     public void tryGetData() throws InterruptedException, ScriptException, NoSuchMethodException {
         
-        for(int i=0; i<30; i++) {
+        for(int i=0; i<15; i++) {
             try {
                 String encriptResponse = getDataFromOnada();
                 ScriptEngineManager sem = new ScriptEngineManager();

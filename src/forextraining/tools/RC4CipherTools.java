@@ -36,6 +36,7 @@ import javax.crypto.spec.PBEParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sun.audio.AudioDataStream;
 
 /**
  *
@@ -146,6 +147,83 @@ public final class RC4CipherTools {
         }
         return new String(output.toByteArray(), charSet);
     }    
+    
+    private byte[] readInputStream(InputStream input) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        int len;
+        while((len = input.read()) != -1) {
+            baos.write(len);
+        }
+        return baos.toByteArray();
+    }
+    
+    public String simpleEncrypt(String text, OutputStream keyOut) throws IOException {
+        ByteArrayOutputStream textOut = new ByteArrayOutputStream();
+        ByteArrayInputStream textInput = new ByteArrayInputStream(text.getBytes());
+        simpleEncrypt(keyOut, textInput, textOut);
+        return bytesToHexString(textOut.toByteArray());
+    }
+    
+    public void simpleEncrypt(OutputStream keyOut, InputStream input, OutputStream output) throws IOException {
+        Objects.requireNonNull(keyOut);
+        Objects.requireNonNull(input);
+        Objects.requireNonNull(output);
+        
+        try {
+            KeyGenerator keyGen = KeyGenerator.getInstance("RC4");
+            keyGen.init(256, random);
+            SecretKey key = keyGen.generateKey();
+            keyOut.write(key.getEncoded());
+            byte[] inputBytes = readInputStream(input);
+            Cipher cipher = Cipher.getInstance("RC4");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            output.write(cipher.doFinal(inputBytes));
+
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException ex) {
+            LOG.error("unexpected error occur!", ex);
+        } catch (IllegalBlockSizeException | BadPaddingException ex) {
+            LOG.error("encrypting error!", ex);
+        }
+    }
+    
+    public String simpleDecrypt(String encryptText, byte[] keyBytes) throws IOException {
+        ByteArrayOutputStream textOut = new ByteArrayOutputStream();
+        simpleDecrypt(new ByteArrayInputStream(keyBytes), 
+                new ByteArrayInputStream(hexStringToBytes(encryptText)), textOut);
+        
+        return new String(textOut.toByteArray());
+    }
+    
+    public void simpleDecrypt(InputStream keyIn, InputStream input, OutputStream output) throws IOException {
+        
+        Objects.requireNonNull(keyIn);
+        Objects.requireNonNull(input);
+        Objects.requireNonNull(output);
+        
+        ByteArrayOutputStream keyBytesStream = new ByteArrayOutputStream();
+        int len;
+        while((len = keyIn.read()) != -1) {
+            keyBytesStream.write(len);
+        }
+        byte[] keyBytes = keyBytesStream.toByteArray();
+        try {
+            Cipher cipher = Cipher.getInstance("RC4");
+            SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "RC4");
+            cipher.init(Cipher.DECRYPT_MODE, keySpec);
+            ByteArrayOutputStream data = new ByteArrayOutputStream();
+            while((len = input.read()) != -1) {
+                data.write(len);
+            }
+            output.write(cipher.doFinal(data.toByteArray()));
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException ex) {
+            LOG.error("error occurs in cipher");
+        } catch (InvalidKeyException ex) {
+            LOG.error("invalid keys");
+        } catch (IllegalBlockSizeException | BadPaddingException ex) {
+            LOG.error("decrypting error occurs!");
+        }
+    }
+    
     public void decrypt(String password, InputStream keyIn, InputStream input, OutputStream output) throws IOException {
         
         Objects.requireNonNull(password);
@@ -271,7 +349,7 @@ public final class RC4CipherTools {
         return keySpec;
     }
     
-    private static String bytesToHexString(byte[] bytes) {
+    public static String bytesToHexString(byte[] bytes) {
         
         StringBuilder buffer = new StringBuilder(bytes.length);
         for (int i=0, n=bytes.length; i < n; i++) {
@@ -291,7 +369,7 @@ public final class RC4CipherTools {
         return highStr + lowStr;
     }
     
-    private static byte[] hexStringToBytes(String hexString) {
+    public static byte[] hexStringToBytes(String hexString) {
         Objects.requireNonNull(hexString);
         int len = hexString.length();
         if(len % 2 != 0) {
@@ -330,7 +408,8 @@ public final class RC4CipherTools {
         System.exit(0);
     }
     
-    public static void main(String[] args) throws IOException {
+    
+    private static void processConsole(String[] args) {
         if(args.length == 0) {
             printUsageAndExit();
         }
@@ -390,6 +469,25 @@ public final class RC4CipherTools {
                 printUsageAndExit();
                 break;
         }
+    }
+    
+    public static void main(String[] args) throws IOException {
+        
+        String plainText = "I Love Java! Hahaha";
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        
+        String ecryptText = RC4CipherTools.getInstance().simpleEncrypt(plainText, baos);
+        System.out.println(ecryptText);
+        String decryptText = RC4CipherTools.getInstance().simpleDecrypt(ecryptText, baos.toByteArray());
+        System.out.println(decryptText);
+        
+        baos.reset();
+        
+        ecryptText = RC4CipherTools.getInstance().simpleEncrypt(plainText, baos);
+        System.out.println(ecryptText);
+        decryptText = RC4CipherTools.getInstance().simpleDecrypt(ecryptText, baos.toByteArray());
+        System.out.println(decryptText);
+        
     }
     
 }

@@ -9,12 +9,14 @@ package forextraining.core;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.Month;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAccessor;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
@@ -54,6 +56,17 @@ public class TimeTest {
         long nowLong = new Date().getTime();
         Instant now = Instant.ofEpochMilli(nowLong);
         assertEquals(nowLong, now.toEpochMilli());
+        
+    }
+    
+    @Test
+    public void testLocalDateTime0(){
+        String date = "03/21/2014 09:45:00.000";
+        TemporalAccessor accessor = DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss.SSS").parse(date);
+        System.out.println(LocalDateTime.from(accessor));
+        
+        
+        System.out.println(Duration.ofHours(25).toDays());
         
     }
     
