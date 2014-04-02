@@ -11,36 +11,33 @@ import forextraining.data.SimpleSoapRequestBuilder.RequestMethod;
 import forextraining.data.SimpleSoapRequestBuilder.RequestMethodArgument;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.Writer;
+import java.math.BigDecimal;
 import java.net.URL;
 import java.net.URLConnection;
-import java.time.DayOfWeek;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.TemporalAdjusters;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Consumer;
+import static java.util.Objects.requireNonNull;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.zip.GZIPInputStream;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
-import javax.xml.transform.TransformerException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xml.sax.Attributes;
@@ -52,14 +49,14 @@ import org.xml.sax.helpers.DefaultHandler;
  *
  * @author Reimi
  */
-public class ComInvestingDataRetriever implements DataRetriever, Runnable {
+public class ComInvestingDataRetriever implements LivePriceList, DataRetriever, Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ComInvestingDataRetriever.class);
     
     private final ComInvestingWebServiceInvoker invoker;
     
     private static final String LINE_SEPARATOR = System.getProperty("line.separator");
-    private static final String PAR_SEPARATOR = ":";
+    private static final String PAR_SEPARATOR = "=";
     private static final String ATT_SEPARATOR = ";";
     
     public static final int OPEN_INDEX = 0;
@@ -70,21 +67,33 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
     
     public static final DateTimeFormatter datetimeFormatter = DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss.SSS");
 
-    private SAXParser saxParser;
+    private SAXParserFactory saxParserFactory;
     
-    private String liveDataSavePath = "c:/forex_livedata";
+    private String liveDataSaveDir = "c:/forex_livedata";
     
     private String tempHistorySavePath = "c:/forex_recent_history";
     
-    private Thread liveDataRetrieveThread;
+    private static final String THREAD_PREFIX = "T-";
+    
+    private ThreadGroup liveDataRetrieveThreadGroup;
+    
+    private boolean stopRetriveSignal = false;
+    
+    private volatile Duration retrieveFrequent = Duration.ofSeconds(5);
+    
+    private Map<String, Map<String, String>> liveDataMap;
+    
+    private Map<String, String> lastRetrieveStamp;
     
     public ComInvestingDataRetriever() {
         this.invoker = new ComInvestingWebServiceInvoker();
-        try {
-            SAXParserFactory factory = SAXParserFactory.newInstance();
-            saxParser = factory.newSAXParser();
-        } catch (ParserConfigurationException | SAXException ex) {
-            LOG.error("sax parser initialize error", ex);
+        this.liveDataMap = new ConcurrentHashMap<>();
+        this.lastRetrieveStamp = new ConcurrentHashMap<>();
+        this.saxParserFactory = SAXParserFactory.newInstance();
+        try {    
+            retrieve();
+        } catch (IOException ex) {
+            LOG.error("retrieving data error!");
         }
     }
 
@@ -116,28 +125,76 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         return null;
     }
     
-    
-    public List<Map<String, String>> retriveRecentHistoryData(CurrencyExchange ce, int maxDataLength, Duration duration) {
+    /**
+     * Retrieve Recent History Data
+     * @param ce The currency type u want retrieve
+     * @param maxDataLength total data length u want retrieve
+     * @param duration the time length u want retrieve normally would be 10 minutes
+     * @return 
+     */
+    public List<Map<String, String>> retrieveRHToMapList(CurrencyExchange ce, int maxDataLength, Duration duration) {
         StringWriter sw = new StringWriter();
         invoker.retrieveRHData(ce, maxDataLength, duration, sw);
         InputSource input = new InputSource(new StringReader(sw.toString()));
         ComInvestingWebServiceResponseParser parser = new ComInvestingWebServiceResponseParser();
         try {
+            SAXParser saxParser = saxParserFactory.newSAXParser();
             saxParser.parse(input, parser);
         } catch (SAXException | IOException ex) {
             LOG.error("retrive recent history data error", ex);
+        } catch (ParserConfigurationException ex) {
         }
         return parser.getDataMap();
     }
     
-    public Object[][] parseHistoryResponseFile(String filePath, int maxDataLength) {
+    public void retrieveRHToFile(CurrencyExchange ce, int maxDataLength, Duration duration) {
+        requireNonNull(ce);
+        File file = makeSureFileExists(tempHistorySavePath);
+        try {
+            FileWriter fwriter = new FileWriter(file, false);
+            StringWriter writer = new StringWriter();
+            invoker.retrieveRHData(ce, maxDataLength, duration, writer);
+            SAXParser saxParser = saxParserFactory.newSAXParser();
+            saxParser.parse(new InputSource(new StringReader(writer.toString())), 
+                    new ComInvestingWebServiceResponseParser(fwriter));
+        } catch (IOException ex) {
+            LOG.error("retrieveRHToFile error", ex);
+        } catch (ParserConfigurationException ex) {
+        } catch (SAXException ex) {
+            LOG.error("saxparser error", ex);
+        }
+
+    }
+
+    public void setRetrieveFrequent(Duration retrieveFrequent) {
+        if(retrieveFrequent != null) {
+            this.retrieveFrequent = retrieveFrequent;
+        }
+    }
+    
+    private File makeSureFileExists(String filePath) {
+        return makeSureFileExists(new File(filePath));
+    }
+    
+    private File makeSureFileExists(File file) {
+        if(!file.exists()) {
+            try {
+                file.createNewFile();
+            } catch (IOException ex) {
+                LOG.error("error occurs when creating a file");
+            }
+        }
+        return file;
+    }
+    
+    public Object[][] parseRHFileToArrays(int maxDataLength) {
         Object[][] data = new Object[maxDataLength+1][5];
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+        try (BufferedReader reader = new BufferedReader(new FileReader(tempHistorySavePath))) {
             String line;
             boolean first = true;
             int lineNum = 1;
-            while((line = reader.readLine()) != null) {
+            while((line = reader.readLine()) != null && lineNum <= maxDataLength) {
                 if(first) {
                     data[0][0] = line;
                     first = false;
@@ -183,41 +240,89 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
     }
     
     @Override
-    public void restartRetriver() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    public final void restartRetriver() {
+        stopRetrieve();
+        liveDataRetrieveThreadGroup = new ThreadGroup("Live Rate Retrieve Group");
+        for(CurrencyExchange ce : CurrencyExchange.values()) {
+            Thread retrieveThread = new Thread(liveDataRetrieveThreadGroup, this, THREAD_PREFIX + ce.getName());
+            retrieveThread.start();
+        }
     }
 
     @Override
     public void stopRetrieve() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+        if(liveDataRetrieveThreadGroup == null)
+            return;
+        
+        Thread[] list = new Thread[liveDataRetrieveThreadGroup.activeCount()];
+        stopRetriveSignal = true;
+        liveDataRetrieveThreadGroup.enumerate(list);
+        LOG.info("Stoping Retrieving Live Rate...");
+        
+        for(int i=0; i<list.length; i++) {
+            try {
+                if(list[i] != null)
+                    list[i].join();
+            } catch (InterruptedException ex) {
+                LOG.warn(list[i].getName()+" join failed!");
+            }
+        }
+        liveDataRetrieveThreadGroup.destroy();
+        liveDataRetrieveThreadGroup = null;
     }
 
     @Override
-    public void retrieve() throws IOException {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    public final void retrieve() throws IOException {
+        for(CurrencyExchange ce : CurrencyExchange.values()) {
+            retrieve(ce);
+        }
+    }
+    
+    public final void retrieve(CurrencyExchange ce) throws IOException {
+        File liveRateDir = prepareLiveRateDir(liveDataSaveDir);
+        File rateFile = makeSureFileExists(new File(liveRateDir, ce.toString()));
+        BufferedReader reader = new BufferedReader(new FileReader(rateFile));
+        String lastTStamp = reader.readLine();
+        if(lastTStamp == null)
+            return;
+        String dataLine = reader.readLine();
+        if(dataLine == null)
+            return;
+        String name = ce.getName();
+        parseLiveDataLine(name, dataLine);
+        lastRetrieveStamp.put(name, lastTStamp);
     }
 
     @Override
     public ZonedDateTime getRetrieveDateTime() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+        return ZonedDateTime.now(Clock.systemUTC());
+    }
+
+    public void setTempHistorySavePath(String tempHistorySavePath) {
+        if(tempHistorySavePath != null) {
+            this.tempHistorySavePath = tempHistorySavePath;
+        }
+    }
+
+    public void setLiveDataSaveDir(String liveDataSaveDir) {
+        if(liveDataSaveDir != null) {
+            this.liveDataSaveDir = liveDataSaveDir;
+        }
     }
     
-    public static void main(String[] args) throws IOException, ParserConfigurationException, TransformerException, SAXException {
-        String soapSavePath = "c:/soapresponse.txt";
-        int maxData = 400;
+    public static void main(String[] args) throws Exception {
         ComInvestingDataRetriever retriever = new ComInvestingDataRetriever();
-        ComInvestingWebServiceInvoker invoker = retriever.new ComInvestingWebServiceInvoker();
-        ComInvestingWebServiceResponseParser parser = retriever.new ComInvestingWebServiceResponseParser(retriever.tempHistorySavePath);
-        FileWriter writer = new FileWriter(soapSavePath);
-        invoker.retrieveRHData(CurrencyExchange.USD_JPY, maxData, Duration.ofMinutes(5), writer);
-        FileReader reader = new FileReader(soapSavePath);
-        retriever.saxParser.parse(new InputSource(reader), parser);
-        Object[][] data = retriever.parseHistoryResponseFile(retriever.tempHistorySavePath, maxData);
-        for(int i=0; i<data.length; i++) {
-            for(int j=0; j<data[i].length; j++) {
-                Object obj = data[i][j];
+        Object[][] data = retriever.parseRHFileToArrays(20);
+        for(Object[] objArr : data) {
+            boolean first = true;
+            for(Object obj : objArr) {
+
                 if(obj != null) {
-                    System.out.print(obj + ",");
+                    if(!first) {
+                        System.out.print(",");
+                    }
+                    System.out.print(obj);
+                    first = false;
                 }
             }
             System.out.println();
@@ -227,6 +332,128 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
     @Override
     public void run() {
         
+        File liveDir = prepareLiveRateDir(liveDataSaveDir);
+        Thread thisThread = Thread.currentThread();
+        String tName = thisThread.getName();
+        String retriveName = tName.substring(THREAD_PREFIX.length());
+        CurrencyExchange type = CurrencyExchange.ofName(retriveName);
+        String fileName = type.toString();
+        File rateFile = makeSureFileExists(new File(liveDir, fileName));
+        SAXParser saxParser = null;
+        
+        try {
+            saxParser = saxParserFactory.newSAXParser();
+        } catch (ParserConfigurationException | SAXException ex) {
+            LOG.error("saxParser creating error!", ex);
+        }
+        
+        requireNonNull(saxParser);
+        
+        while(!stopRetriveSignal) {
+            try(FileWriter fwriter = new FileWriter(rateFile, false))  {
+                String lastTStamp = lastRetrieveStamp.get(retriveName);
+                StringWriter writer = new StringWriter();
+                if(lastTStamp == null) {
+                    invoker.retrieveRTData(type, writer);
+                } else {
+                    invoker.retrieveLastRTData(type, lastTStamp, writer);
+                }
+                
+                saxParser.parse(new InputSource(new StringReader(writer.toString())), 
+                        new ComInvestingWebServiceResponseParser(fwriter));
+                retrieve(type);
+            }catch(IOException ex) {
+                LOG.error("write live rate file error!", ex);
+            } catch (SAXException ex) {
+                LOG.error("the retrieved xml error!", ex);
+            }
+            
+            try {
+                Thread.sleep(retrieveFrequent.toMillis());
+            } catch (InterruptedException ex) {
+            }
+        }
+    }
+
+    private void parseLiveDataLine(String currencyType, String liveDataLine) {
+        String[] attList = liveDataLine.split(ATT_SEPARATOR);
+        Map<String, String> currencyDataMap = new HashMap<>();
+        for(String pairs : attList) {
+            String[] pair = pairs.split(PAR_SEPARATOR);
+            currencyDataMap.put(pair[0], pair[1]);
+        }
+        liveDataMap.put(currencyType, currencyDataMap);
+    }
+
+    private File prepareLiveRateDir(String liveDataSaveDir) {
+        File dir = new File(liveDataSaveDir);
+        if(!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public String getTick(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return null;
+        }
+        return dataMap.get(ComInvestingWebServiceResponseParser.TICK_ATT);
+    }
+
+    @Override
+    public BigDecimal getChangeValue(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return new BigDecimal(0);
+        }
+        return new BigDecimal(dataMap.get(ComInvestingWebServiceResponseParser.CHANGE_ATT));
+    }
+
+    @Override
+    public String getChangePercentValue(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return null;
+        }
+        return dataMap.get(ComInvestingWebServiceResponseParser.CHANGE_PERCENT_ATT);
+    }
+
+    @Override
+    public ZonedDateTime getPriceDateTime(CurrencyExchange exchangeType) {
+                Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return ZonedDateTime.now(Clock.systemUTC());
+        }
+        return LocalDateTime.from(datetimeFormatter.parse(dataMap.get(ComInvestingWebServiceResponseParser.DATE_ATT))).atZone(ZoneId.of("Z"));
+    }
+
+    @Override
+    public BigDecimal getOtherValue(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return new BigDecimal(0);
+        }
+        return new BigDecimal(dataMap.get(ComInvestingWebServiceResponseParser.OTHER_ATT));
+    }
+
+    @Override
+    public BigDecimal getAskPriceValue(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return new BigDecimal(0);
+        }
+        return new BigDecimal(dataMap.get(ComInvestingWebServiceResponseParser.ASK_ATT));
+    }
+
+    @Override
+    public BigDecimal getBidPriceValue(CurrencyExchange exchangeType) {
+        Map<String, String> dataMap = liveDataMap.get(exchangeType.getName());
+        if(dataMap == null) {
+            return new BigDecimal(0);
+        }
+        return new BigDecimal(dataMap.get(ComInvestingWebServiceResponseParser.BID_ATT));
     }
     
     private class ComInvestingWebServiceResponseParser extends DefaultHandler {
@@ -242,6 +469,9 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         public static final String LOW_ATT = "low";
         public static final String HIGH_ATT = "high";
         public static final String DATE_ATT = "date";
+        public static final String CHANGE_ATT = "change";
+        public static final String CHANGE_PERCENT_ATT = "changep";
+        public static final String TICK_ATT = "tick";
         
         private Writer writer;
         
@@ -249,12 +479,9 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         
         public ComInvestingWebServiceResponseParser(String savePath) {
 
-            Objects.requireNonNull(savePath);            
-            File file = new File(savePath);
-            try {
-                if(!file.exists()) {
-                    file.createNewFile();
-                }
+            requireNonNull(savePath);            
+            File file = makeSureFileExists(savePath);
+            try {    
                 writer = new FileWriter(savePath, false);
             } catch (IOException ex) {
                 LOG.error("Error occur when connecting to save file:" + file.getAbsolutePath());
@@ -262,7 +489,7 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         }
         
         public ComInvestingWebServiceResponseParser(Writer writer) {
-            Objects.requireNonNull(writer);
+            requireNonNull(writer);
             this.writer = writer;
         }
 
@@ -271,7 +498,7 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         }
         
         public ComInvestingWebServiceResponseParser(List<Map<String, String>> dataMap) {
-            Objects.requireNonNull(dataMap);
+            requireNonNull(dataMap);
             this.dataMap = dataMap;
         }
 
@@ -380,22 +607,22 @@ public class ComInvestingDataRetriever implements DataRetriever, Runnable {
         private static final String TYPE_STRING = "string";
 
         public void retrieveLastRTData(CurrencyExchange ce, String tstamp, Writer output) {
-            Objects.requireNonNull(ce);
-            Objects.requireNonNull(tstamp);
-            Objects.requireNonNull(output);
+            requireNonNull(ce);
+            requireNonNull(tstamp);
+            requireNonNull(output);
             invokeWebMethod(rtLastMethod(getInstrument(ce.getName()), tstamp), output);
         }
         
         public void retrieveRTData(CurrencyExchange ce, Writer output) {
-            Objects.requireNonNull(ce);
-            Objects.requireNonNull(output);
+            requireNonNull(ce);
+            requireNonNull(output);
             invokeWebMethod(rtMethod(getInstrument(ce.getName())), output);
         }
         
         public void retrieveRHData(CurrencyExchange ce, int maxData, Duration duration, Writer output) {
             
-            Objects.requireNonNull(ce);
-            Objects.requireNonNull(output);
+            requireNonNull(ce);
+            requireNonNull(output);
             
             String top = maxData == 0 ? "600" : String.valueOf(maxData);
             String timeFrame = "15M";

@@ -24,6 +24,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.script.Invocable;
 import javax.script.ScriptEngine;
 import javax.script.ScriptEngineManager;
@@ -57,6 +59,41 @@ public class TestExchange {
         Object obj = invoker.invokeFunction("rc4decrypt", s);
         Object encode = invoker.invokeFunction("hexEncode", obj);
         
+    }
+    
+    volatile int counter;
+    
+    @Test
+    public void threadGroupTest() throws InterruptedException {
+        
+        ThreadGroup tg = new ThreadGroup("tg");
+        
+        boolean[] stopSign = new boolean[1];
+        stopSign[0] = false;
+        for(int i=0; i<5; i++) {
+            String name = "TG-Thread-"+i;
+            Thread t = new Thread(tg, ()->{
+                while(!stopSign[0]) {
+                    counter += 1;
+                    System.out.println("ThreadName:"+name+ ", Counter:"+(counter));
+                    try {
+                    Thread.sleep(1000);
+                    } catch (InterruptedException ex) {
+                    }
+                }
+            }, name);
+            t.start();
+        }
+        Thread.sleep(4000);
+        
+        Thread[] list = new Thread[tg.activeCount()];
+        stopSign[0] = true;
+        tg.enumerate(list);
+        for (int i = 0; i < list.length; i++) {
+            if(list[i] != null)
+                list[i].join();
+        }
+        tg.destroy();
     }
     
     @Test
