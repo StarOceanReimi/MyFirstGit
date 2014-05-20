@@ -1,7 +1,6 @@
 (function (factory) {
     this.Testing = factory();
 })(function () {
-    'use strict';
 
     function cp(dest, src) {
         if (!src) {
